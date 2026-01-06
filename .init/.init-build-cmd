@@ -1,0 +1,4 @@
+{
+    "command": "python init_db.py",
+    "working_directory": "/home/kavia/workspace/code-generation/local-todo-list-195445-195455/database"
+}
