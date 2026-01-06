@@ -1,132 +1,127 @@
 #!/usr/bin/env python3
-"""Initialize SQLite database for database"""
+"""Initialize/upgrade the optional SQLite database schema.
 
-import sqlite3
+This database is OPTIONAL tooling only and is NOT used by the frontend app.
+It exists for developers to inspect/test a minimal schema locally.
+
+Running this script is idempotent: it creates tables if missing.
+"""
+
 import os
+import sqlite3
+from typing import Tuple
 
 DB_NAME = "myapp.db"
-DB_USER = "kaviasqlite"  # Not used for SQLite, but kept for consistency
-DB_PASSWORD = "kaviadefaultpassword"  # Not used for SQLite, but kept for consistency
-DB_PORT = "5000"  # Not used for SQLite, but kept for consistency
 
-print("Starting SQLite setup...")
 
-# Check if database already exists
-db_exists = os.path.exists(DB_NAME)
-if db_exists:
-    print(f"SQLite database already exists at {DB_NAME}")
-    # Verify it's accessible
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        conn.execute("SELECT 1")
-        conn.close()
-        print("Database is accessible and working.")
-    except Exception as e:
-        print(f"Warning: Database exists but may be corrupted: {e}")
-else:
-    print("Creating new SQLite database...")
+def _connect(db_name: str) -> Tuple[sqlite3.Connection, sqlite3.Cursor]:
+    """Create a SQLite connection with sensible defaults."""
+    conn = sqlite3.connect(db_name)
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA foreign_keys = ON")
+    # Improves concurrent reads during inspection.
+    cursor.execute("PRAGMA journal_mode = WAL")
+    return conn, cursor
 
-# Create database with sample tables
-conn = sqlite3.connect(DB_NAME)
-cursor = conn.cursor()
 
-# Create initial schema
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS app_info (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        key TEXT UNIQUE NOT NULL,
-        value TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+def _create_schema(cursor: sqlite3.Cursor) -> None:
+    """Create the minimal schema used for optional inspection/testing."""
+    # Minimal todos table (intentionally not coupled to frontend code).
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS todos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            completed INTEGER NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        )
+        """
     )
-""")
 
-# Create a sample users table as an example
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_todos_completed
+        ON todos(completed)
+        """
     )
-""")
 
-# Insert initial data
-cursor.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES (?, ?)", 
-               ("project_name", "database"))
-cursor.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES (?, ?)", 
-               ("version", "0.1.0"))
-cursor.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES (?, ?)", 
-               ("author", "John Doe"))
-cursor.execute("INSERT OR REPLACE INTO app_info (key, value) VALUES (?, ?)", 
-               ("description", ""))
 
-conn.commit()
+def _write_connection_info(db_name: str) -> None:
+    """Write db_connection.txt with helpful paths/strings for humans/tools."""
+    current_dir = os.getcwd()
+    connection_string = f"sqlite:///{current_dir}/{db_name}"
 
-# Get database statistics
-cursor.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-table_count = cursor.fetchone()[0]
-
-cursor.execute("SELECT COUNT(*) FROM app_info")
-record_count = cursor.fetchone()[0]
-
-conn.close()
-
-# Save connection information to a file
-current_dir = os.getcwd()
-connection_string = f"sqlite:///{current_dir}/{DB_NAME}"
-
-try:
-    with open("db_connection.txt", "w") as f:
-        f.write(f"# SQLite connection methods:\n")
-        f.write(f"# Python: sqlite3.connect('{DB_NAME}')\n")
+    with open("db_connection.txt", "w", encoding="utf-8") as f:
+        f.write("# SQLite connection methods:\n")
+        f.write(f"# Python: sqlite3.connect('{db_name}')\n")
         f.write(f"# Connection string: {connection_string}\n")
-        f.write(f"# File path: {current_dir}/{DB_NAME}\n")
-    print("Connection information saved to db_connection.txt")
-except Exception as e:
-    print(f"Warning: Could not save connection info: {e}")
+        f.write(f"# File path: {current_dir}/{db_name}\n")
 
-# Create environment variables file for Node.js viewer
-db_path = os.path.abspath(DB_NAME)
 
-# Ensure db_visualizer directory exists
-if not os.path.exists("db_visualizer"):
-    os.makedirs("db_visualizer", exist_ok=True)
-    print("Created db_visualizer directory")
+def _write_visualizer_env(db_name: str) -> None:
+    """Write env file used by the optional Node.js db_visualizer tool."""
+    db_path = os.path.abspath(db_name)
 
-try:
-    with open("db_visualizer/sqlite.env", "w") as f:
-        f.write(f"export SQLITE_DB=\"{db_path}\"\n")
-    print(f"Environment variables saved to db_visualizer/sqlite.env")
-except Exception as e:
-    print(f"Warning: Could not save environment variables: {e}")
+    if not os.path.exists("db_visualizer"):
+        os.makedirs("db_visualizer", exist_ok=True)
 
-print("\nSQLite setup complete!")
-print(f"Database: {DB_NAME}")
-print(f"Location: {current_dir}/{DB_NAME}")
-print("")
+    with open("db_visualizer/sqlite.env", "w", encoding="utf-8") as f:
+        f.write(f'export SQLITE_DB="{db_path}"\n')
 
-print("To use with Node.js viewer, run: source db_visualizer/sqlite.env")
 
-print("\nTo connect to the database, use one of the following methods:")
-print(f"1. Python: sqlite3.connect('{DB_NAME}')")
-print(f"2. Connection string: {connection_string}")
-print(f"3. Direct file access: {current_dir}/{DB_NAME}")
-print("")
+def main() -> None:
+    """Create/upgrade the SQLite database and write helper metadata files."""
+    print("Starting SQLite setup (optional tooling)...")
 
-print("Database statistics:")
-print(f"  Tables: {table_count}")
-print(f"  App info records: {record_count}")
+    db_exists = os.path.exists(DB_NAME)
+    if db_exists:
+        print(f"SQLite database already exists at {DB_NAME} (will ensure schema is up to date)")
+    else:
+        print("Creating new SQLite database...")
 
-# If sqlite3 CLI is available, show how to use it
-try:
-    import subprocess
-    result = subprocess.run(['which', 'sqlite3'], capture_output=True, text=True)
-    if result.returncode == 0:
-        print("")
-        print("SQLite CLI is available. You can also use:")
-        print(f"  sqlite3 {DB_NAME}")
-except:
-    pass
+    conn, cursor = _connect(DB_NAME)
+    try:
+        _create_schema(cursor)
+        conn.commit()
 
-# Exit successfully
-print("\nScript completed successfully.")
+        # Stats
+        cursor.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )
+        table_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM todos")
+        todo_count = cursor.fetchone()[0]
+    finally:
+        conn.close()
+
+    # Helper files for humans/tools
+    _write_connection_info(DB_NAME)
+    _write_visualizer_env(DB_NAME)
+
+    current_dir = os.getcwd()
+    print("\nSQLite setup complete!")
+    print(f"Database: {DB_NAME}")
+    print(f"Location: {current_dir}/{DB_NAME}")
+    print("")
+    print("Schema:")
+    print("  - todos")
+    print("")
+    print("Database statistics:")
+    print(f"  Tables: {table_count}")
+    print(f"  Todos:  {todo_count}")
+    print("")
+    print("Inspect:")
+    print("  python3 inspect_db.py")
+    print("  python3 db_shell.py")
+    print("")
+    print("Optional Node viewer:")
+    print("  source db_visualizer/sqlite.env")
+    print("  cd db_visualizer && npm install && npm start")
+    print("")
+    print("Script completed successfully.")
+
+
+if __name__ == "__main__":
+    main()
